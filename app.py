@@ -12,8 +12,19 @@ from sqlalchemy.orm import joinedload
 
 # ---------- App Configuration ----------
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'your-secret-key-change-in-production'
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///store.db'
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your-secret-key-change-in-production')
+
+# ✅ FIXED: Use PostgreSQL on Render, SQLite locally
+database_url = os.environ.get('DATABASE_URL')
+if database_url:
+    # Fix for Render's PostgreSQL URL (needs to remove postgres:// vs postgresql://)
+    if database_url.startswith('postgres://'):
+        database_url = database_url.replace('postgres://', 'postgresql://', 1)
+    app.config['SQLALCHEMY_DATABASE_URI'] = database_url
+else:
+    # Local development with SQLite
+    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///store.db'
+
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # Upload settings
@@ -149,45 +160,50 @@ def timesince(dt, default="just now"):
 
 def auto_archive_collected_items():
     """Automatically archive items that were collected more than 48 hours ago"""
-    cutoff_time = datetime.utcnow() - timedelta(hours=48)
-    
-    # Find collected items older than 48 hours that haven't been archived yet
-    items_to_archive = Item.query.filter(
-        Item.status == 'collected',
-        Item.collected_at <= cutoff_time
-    ).all()
-    
-    archived_count = 0
-    for item in items_to_archive:
-        # Check if already archived (by original_item_id)
-        existing = ArchivedItem.query.filter_by(original_item_id=item.id).first()
-        if existing:
-            continue
-            
-        # Create archive record
-        archived = ArchivedItem(
-            original_item_id=item.id,
-            unique_token=item.unique_token,
-            description=item.description,
-            photo_filename=item.photo_filename,
-            storage_price=item.storage_price,
-            amount_paid=item.amount_paid,
-            payment_type=item.payment_type,
-            customer_name=item.customer.name,
-            customer_phone=item.customer.phone,
-            customer_email=item.customer.email,
-            stored_at=item.stored_at,
-            collected_at=item.collected_at,
-            archived_at=datetime.utcnow()
-        )
-        db.session.add(archived)
-        archived_count += 1
-    
-    if archived_count > 0:
-        db.session.commit()
-        print(f"[Auto-Archive] Archived {archived_count} collected items")
-    
-    return archived_count
+    try:
+        cutoff_time = datetime.utcnow() - timedelta(hours=48)
+        
+        # Find collected items older than 48 hours that haven't been archived yet
+        items_to_archive = Item.query.filter(
+            Item.status == 'collected',
+            Item.collected_at <= cutoff_time
+        ).all()
+        
+        archived_count = 0
+        for item in items_to_archive:
+            # Check if already archived (by original_item_id)
+            existing = ArchivedItem.query.filter_by(original_item_id=item.id).first()
+            if existing:
+                continue
+                
+            # Create archive record
+            archived = ArchivedItem(
+                original_item_id=item.id,
+                unique_token=item.unique_token,
+                description=item.description,
+                photo_filename=item.photo_filename,
+                storage_price=item.storage_price,
+                amount_paid=item.amount_paid,
+                payment_type=item.payment_type,
+                customer_name=item.customer.name,
+                customer_phone=item.customer.phone,
+                customer_email=item.customer.email,
+                stored_at=item.stored_at,
+                collected_at=item.collected_at,
+                archived_at=datetime.utcnow()
+            )
+            db.session.add(archived)
+            archived_count += 1
+        
+        if archived_count > 0:
+            db.session.commit()
+            print(f"[Auto-Archive] Archived {archived_count} collected items")
+        
+        return archived_count
+    except Exception as e:
+        print(f"[Auto-Archive Error] {str(e)}")
+        db.session.rollback()
+        return 0
 
 # ---------- Routes ----------
 @app.route('/')
@@ -478,98 +494,111 @@ def delete_expired_items():
 @app.route('/archive')
 def archive_history():
     """View archived items history"""
-    search_query = request.args.get('search', '').strip()
-    filter_date = request.args.get('date', 'all')  # today, week, month, all
-    
-    query = ArchivedItem.query
-    
-    # Search filter
-    if search_query:
-        query = query.filter(
-            db.or_(
-                ArchivedItem.description.ilike(f'%{search_query}%'),
-                ArchivedItem.customer_name.ilike(f'%{search_query}%'),
-                ArchivedItem.customer_phone.ilike(f'%{search_query}%'),
-                ArchivedItem.unique_token.ilike(f'%{search_query}%')
+    try:
+        search_query = request.args.get('search', '').strip()
+        filter_date = request.args.get('date', 'all')  # today, week, month, all
+        
+        query = ArchivedItem.query
+        
+        # Search filter
+        if search_query:
+            query = query.filter(
+                db.or_(
+                    ArchivedItem.description.ilike(f'%{search_query}%'),
+                    ArchivedItem.customer_name.ilike(f'%{search_query}%'),
+                    ArchivedItem.customer_phone.ilike(f'%{search_query}%'),
+                    ArchivedItem.unique_token.ilike(f'%{search_query}%')
+                )
             )
-        )
-    
-    # Date filter
-    now = datetime.utcnow()
-    if filter_date == 'today':
-        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        query = query.filter(ArchivedItem.archived_at >= start)
-    elif filter_date == 'week':
-        start = now - timedelta(days=7)
-        query = query.filter(ArchivedItem.archived_at >= start)
-    elif filter_date == 'month':
-        start = now - timedelta(days=30)
-        query = query.filter(ArchivedItem.archived_at >= start)
-    
-    archived_items = query.order_by(ArchivedItem.archived_at.desc()).all()
-    
-    # Statistics
-    total_archived = ArchivedItem.query.count()
-    total_value = sum(item.storage_price for item in archived_items)
-    total_paid = sum(item.amount_paid for item in archived_items)
-    
-    return render_template('archive_history.html',
-                         archived_items=archived_items,
-                         search_query=search_query,
-                         filter_date=filter_date,
-                         total_archived=total_archived,
-                         total_value=total_value,
-                         total_paid=total_paid)
+        
+        # Date filter
+        now = datetime.utcnow()
+        if filter_date == 'today':
+            start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            query = query.filter(ArchivedItem.archived_at >= start)
+        elif filter_date == 'week':
+            start = now - timedelta(days=7)
+            query = query.filter(ArchivedItem.archived_at >= start)
+        elif filter_date == 'month':
+            start = now - timedelta(days=30)
+            query = query.filter(ArchivedItem.archived_at >= start)
+        
+        archived_items = query.order_by(ArchivedItem.archived_at.desc()).all()
+        
+        # Statistics
+        total_archived = ArchivedItem.query.count()
+        total_value = sum(item.storage_price for item in archived_items)
+        total_paid = sum(item.amount_paid for item in archived_items)
+        
+        return render_template('archive_history.html',
+                             archived_items=archived_items,
+                             search_query=search_query,
+                             filter_date=filter_date,
+                             total_archived=total_archived,
+                             total_value=total_value,
+                             total_paid=total_paid)
+    except Exception as e:
+        print(f"Archive error: {str(e)}")
+        flash(f'Error loading archive: {str(e)}', 'danger')
+        return render_template('archive_history.html', archived_items=[], total_archived=0, total_value=0, total_paid=0)
 
 @app.route('/archive/<int:archive_id>/restore', methods=['POST'])
 def restore_from_archive(archive_id):
     """Restore an archived item back to active items"""
-    archived = ArchivedItem.query.get_or_404(archive_id)
+    try:
+        archived = ArchivedItem.query.get_or_404(archive_id)
+        
+        # Check if original customer still exists
+        customer = Customer.query.filter_by(phone=archived.customer_phone).first()
+        if not customer:
+            flash(f'Cannot restore: Customer {archived.customer_name} no longer exists', 'danger')
+            return redirect(url_for('archive_history'))
+        
+        # Create new item from archived data
+        new_item = Item(
+            description=archived.description,
+            photo_filename=archived.photo_filename,
+            storage_price=archived.storage_price,
+            amount_paid=archived.amount_paid,
+            payment_type=archived.payment_type,
+            status='active',
+            stored_at=archived.stored_at,
+            customer_id=customer.id
+        )
+        db.session.add(new_item)
+        db.session.commit()
+        
+        flash(f'Item "{archived.description}" restored successfully!', 'success')
+    except Exception as e:
+        flash(f'Error restoring item: {str(e)}', 'danger')
     
-    # Check if original customer still exists
-    customer = Customer.query.filter_by(phone=archived.customer_phone).first()
-    if not customer:
-        flash(f'Cannot restore: Customer {archived.customer_name} no longer exists', 'danger')
-        return redirect(url_for('archive_history'))
-    
-    # Create new item from archived data
-    new_item = Item(
-        description=archived.description,
-        photo_filename=archived.photo_filename,
-        storage_price=archived.storage_price,
-        amount_paid=archived.amount_paid,
-        payment_type=archived.payment_type,
-        status='active',
-        stored_at=archived.stored_at,
-        customer_id=customer.id
-    )
-    db.session.add(new_item)
-    db.session.commit()
-    
-    flash(f'Item "{archived.description}" restored successfully!', 'success')
     return redirect(url_for('archive_history'))
 
 @app.route('/archive/clear', methods=['POST'])
 def clear_old_archives():
     """Delete archives older than specified days"""
-    days = int(request.form.get('days', 90))
-    cutoff = datetime.utcnow() - timedelta(days=days)
+    try:
+        days = int(request.form.get('days', 90))
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        
+        old_archives = ArchivedItem.query.filter(ArchivedItem.archived_at <= cutoff).all()
+        count = len(old_archives)
+        
+        # Delete photos from filesystem
+        for archive in old_archives:
+            if archive.photo_filename:
+                photo_path = os.path.join(app.config['UPLOAD_FOLDER'], archive.photo_filename)
+                if os.path.exists(photo_path):
+                    os.remove(photo_path)
+        
+        # Delete from database
+        ArchivedItem.query.filter(ArchivedItem.archived_at <= cutoff).delete()
+        db.session.commit()
+        
+        flash(f'Deleted {count} archived items older than {days} days', 'success')
+    except Exception as e:
+        flash(f'Error clearing archives: {str(e)}', 'danger')
     
-    old_archives = ArchivedItem.query.filter(ArchivedItem.archived_at <= cutoff).all()
-    count = len(old_archives)
-    
-    # Delete photos from filesystem
-    for archive in old_archives:
-        if archive.photo_filename:
-            photo_path = os.path.join(app.config['UPLOAD_FOLDER'], archive.photo_filename)
-            if os.path.exists(photo_path):
-                os.remove(photo_path)
-    
-    # Delete from database
-    ArchivedItem.query.filter(ArchivedItem.archived_at <= cutoff).delete()
-    db.session.commit()
-    
-    flash(f'Deleted {count} archived items older than {days} days', 'success')
     return redirect(url_for('archive_history'))
 
 # ---------- API Endpoints ----------
@@ -589,26 +618,30 @@ def api_get_item(token):
 @app.route('/api/archive/stats')
 def api_archive_stats():
     """Return archive statistics"""
-    total_archived = ArchivedItem.query.count()
-    total_value = sum(item.storage_price for item in ArchivedItem.query.all())
-    total_paid = sum(item.amount_paid for item in ArchivedItem.query.all())
-    
-    # Monthly breakdown
-    from sqlalchemy import func
-    monthly = db.session.query(
-        func.strftime('%Y-%m', ArchivedItem.archived_at).label('month'),
-        func.count(ArchivedItem.id).label('count'),
-        func.sum(ArchivedItem.storage_price).label('value')
-    ).group_by('month').order_by('month').all()
-    
-    return jsonify({
-        'total_archived': total_archived,
-        'total_value': total_value,
-        'total_paid': total_paid,
-        'monthly': [{'month': m.month, 'count': m.count, 'value': m.value} for m in monthly]
-    })
+    try:
+        total_archived = ArchivedItem.query.count()
+        total_value = sum(item.storage_price for item in ArchivedItem.query.all())
+        total_paid = sum(item.amount_paid for item in ArchivedItem.query.all())
+        
+        # Monthly breakdown
+        from sqlalchemy import func
+        monthly = db.session.query(
+            func.strftime('%Y-%m', ArchivedItem.archived_at).label('month'),
+            func.count(ArchivedItem.id).label('count'),
+            func.sum(ArchivedItem.storage_price).label('value')
+        ).group_by('month').order_by('month').all()
+        
+        return jsonify({
+            'total_archived': total_archived,
+            'total_value': float(total_value) if total_value else 0,
+            'total_paid': float(total_paid) if total_paid else 0,
+            'monthly': [{'month': m.month, 'count': m.count, 'value': float(m.value) if m.value else 0} for m in monthly]
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(debug=False, host='0.0.0.0', port=port)
