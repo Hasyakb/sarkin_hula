@@ -39,6 +39,11 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 
+# ✅ CREATE DATABASE TABLES AUTOMATICALLY
+with app.app_context():
+    db.create_all()
+    print("✅ Database tables verified/created successfully")
+
 # ---------- Database Models ----------
 class Customer(db.Model):
     __tablename__ = 'customers'
