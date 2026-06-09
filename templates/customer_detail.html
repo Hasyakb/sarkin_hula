@@ -1,0 +1,203 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="mb-4">
+    <div class="d-flex justify-content-between align-items-start flex-wrap">
+        <div>
+            <a href="{{ url_for('customer_list') }}" class="text-decoration-none mb-2 d-inline-block">
+                <i class="bi bi-arrow-left"></i> Back to Customers
+            </a>
+            <div class="d-flex align-items-center mt-2">
+                <div class="rounded-circle bg-primary bg-opacity-10 p-3 me-3">
+                    <i class="bi bi-person-circle fs-2" style="color: #007AFF;"></i>
+                </div>
+                <div>
+                    <h3 class="fw-bold mb-1">{{ customer.name }}</h3>
+                    <div class="text-muted">
+                        <i class="bi bi-telephone-fill me-1"></i> {{ customer.phone }}
+                        {% if customer.email %}
+                        | <i class="bi bi-envelope-fill me-1"></i> {{ customer.email }}
+                        {% endif %}
+                    </div>
+                    {% if customer.address %}
+                    <div class="text-muted small mt-1">
+                        <i class="bi bi-geo-alt-fill me-1"></i> {{ customer.address }}
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        <div class="mt-3 mt-sm-0">
+            <a href="{{ url_for('edit_customer', customer_id=customer.id) }}" class="btn btn-outline-primary ios-button me-2">
+                <i class="bi bi-pencil"></i> Edit Profile
+            </a>
+            <a href="{{ url_for('store_item', customer_id=customer.id) }}" class="btn btn-primary ios-button">
+                <i class="bi bi-box-seam"></i> Store New Item
+            </a>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-3 col-6">
+        <div class="ios-card text-center p-3">
+            <small class="text-muted">Total Items</small>
+            <h2 class="fw-bold mb-0">{{ customer.total_items_count() }}</h2>
+        </div>
+    </div>
+    <div class="col-md-3 col-6">
+        <div class="ios-card text-center p-3">
+            <small class="text-muted">Active Items</small>
+            <h2 class="fw-bold mb-0" style="color: #34C759;">{{ customer.active_items_count() }}</h2>
+        </div>
+    </div>
+    <div class="col-md-3 col-6">
+        <div class="ios-card text-center p-3">
+            <small class="text-muted">Collected Items</small>
+            <h2 class="fw-bold mb-0">{{ customer.total_items_count() - customer.active_items_count() }}</h2>
+        </div>
+    </div>
+    <div class="col-md-3 col-6">
+        <div class="ios-card text-center p-3">
+            <small class="text-muted">Total Unpaid</small>
+            <h2 class="fw-bold mb-0" style="color: #FF3B30;">
+                {% set unpaid_total = customer.total_unpaid() %}
+                ₦{{ "%.2f"|format(unpaid_total) }}
+            </h2>
+        </div>
+    </div>
+</div>
+
+<h5 class="fw-bold mb-3">Stored Items</h5>
+
+{% if items %}
+    {% for item in items %}
+    <div class="ios-card mb-3">
+        <div class="row align-items-center">
+            <div class="col-auto">
+                {% if item.photo_filename %}
+                <img src="{{ url_for('static', filename='uploads/' + item.photo_filename) }}" 
+                     class="item-photo" alt="Item" 
+                     style="width: 80px; height: 80px; object-fit: cover; border-radius: 14px; cursor: pointer;"
+                     onclick="showImageModal('{{ url_for('static', filename='uploads/' + item.photo_filename) }}', '{{ item.description }}')">
+                {% else %}
+                <div class="bg-light d-flex align-items-center justify-content-center" 
+                     style="width: 80px; height: 80px; border-radius: 14px;">
+                    <i class="bi bi-image fs-2 text-muted"></i>
+                </div>
+                {% endif %}
+            </div>
+            <div class="col">
+                <div class="d-flex justify-content-between align-items-start flex-wrap">
+                    <div>
+                        <strong>{{ item.description }}</strong>
+                        <div class="small text-muted">
+                            Token: <code>{{ item.unique_token[:12] }}...</code>
+                            <button class="btn btn-link btn-sm p-0 ms-1" onclick="copyToClipboard('{{ item.unique_token }}')" title="Copy token">
+                                <i class="bi bi-copy"></i>
+                            </button>
+                        </div>
+                        <div class="small text-muted">
+                            Stored: {{ item.stored_at.strftime('%b %d, %Y at %H:%M') }}
+                        </div>
+                        <div class="mt-1">
+                            {% if item.status == 'active' %}
+                                <span class="badge bg-success">Active</span>
+                                <span class="badge bg-info ms-1">
+                                    <i class="bi bi-clock"></i> {{ item.time_remaining() }}
+                                </span>
+                            {% elif item.status == 'collected' %}
+                                <span class="badge bg-secondary">Collected</span>
+                            {% else %}
+                                <span class="badge bg-danger">Expired</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="text-end mt-2 mt-sm-0">
+                        <div>Price: <strong>₦{{ "%.2f"|format(item.storage_price) }}</strong></div>
+                        <div>Paid: <span class="text-success">₦{{ "%.2f"|format(item.amount_paid) }}</span></div>
+                        <div class="fw-bold text-danger">
+                            Remaining: ₦{{ "%.2f"|format(item.remaining_balance()) }}
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-12 col-md-auto mt-3 mt-md-0">
+                <div class="d-flex gap-2">
+                    {% if not item.is_fully_paid() and item.status == 'active' %}
+                    <a href="{{ url_for('make_payment', token=item.unique_token) }}" class="btn btn-sm btn-outline-primary">
+                        <i class="bi bi-credit-card"></i> Pay
+                    </a>
+                    {% endif %}
+                    {% if item.is_fully_paid() and item.status == 'active' %}
+                    <form method="POST" action="{{ url_for('collect_item', token=item.unique_token) }}" style="display: inline;" onsubmit="return confirm('Confirm collection?')">
+                        <button type="submit" class="btn btn-sm btn-success">
+                            <i class="bi bi-check2-circle"></i> Collect
+                        </button>
+                    </form>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        
+        {% if not item.is_fully_paid() and item.status == 'active' %}
+        <div class="mt-3">
+            {% set payment_percentage = (item.amount_paid / item.storage_price) * 100 %}
+            <div class="d-flex justify-content-between small mb-1">
+                <span>Payment Progress (100% required)</span>
+                <span>{{ "%.1f"|format(payment_percentage) }}%</span>
+            </div>
+            <div class="progress" style="height: 6px;">
+                <div class="progress-bar bg-success" role="progressbar" style="width: {{ payment_percentage }}%"></div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+    {% endfor %}
+{% else %}
+    <div class="ios-card text-center py-5">
+        <i class="bi bi-inbox fs-1 text-muted"></i>
+        <p class="mt-2">No items stored yet</p>
+        <a href="{{ url_for('store_item', customer_id=customer.id) }}" class="btn btn-primary">
+            Store First Item
+        </a>
+    </div>
+{% endif %}
+
+<!-- Image Modal -->
+<div class="modal fade" id="imageModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="modalTitle">Item Photo</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body text-center">
+                <img id="modalImage" src="" alt="Item" style="max-width: 100%; max-height: 60vh;">
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-primary" onclick="downloadImage()">
+                    <i class="bi bi-download"></i> Download
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function showImageModal(imageUrl, title) {
+    document.getElementById('modalImage').src = imageUrl;
+    document.getElementById('modalTitle').innerText = title;
+    new bootstrap.Modal(document.getElementById('imageModal')).show();
+}
+
+function downloadImage() {
+    const img = document.getElementById('modalImage');
+    const link = document.createElement('a');
+    link.download = 'item_photo.jpg';
+    link.href = img.src;
+    link.click();
+}
+</script>
+{% endblock %}

@@ -1,0 +1,211 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="mb-3">
+    <a href="{{ url_for('dashboard') }}" class="btn btn-link text-decoration-none p-0 d-inline-flex align-items-center" style="color: #007AFF;">
+        <i class="bi bi-arrow-left fs-5 me-1"></i>
+        <span>Back to Dashboard</span>
+    </a>
+</div>
+
+<div class="d-flex justify-content-between align-items-center flex-wrap mb-4">
+    <div>
+        <h3 class="fw-bold">
+            <i class="bi bi-archive-fill me-2" style="color: #8E8E93;"></i>
+            Archive History
+        </h3>
+        <p class="text-muted">View items that were collected and archived after 48 hours</p>
+    </div>
+    <div>
+        <button type="button" class="btn btn-outline-danger ios-button" data-bs-toggle="modal" data-bs-target="#clearArchiveModal">
+            <i class="bi bi-trash3"></i> Clear Old Archives
+        </button>
+    </div>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-4">
+        <div class="ios-card text-center p-3">
+            <i class="bi bi-archive fs-2" style="color: #007AFF;"></i>
+            <h3 class="fw-bold mb-0 mt-2">{{ total_archived }}</h3>
+            <small class="text-muted">Total Archived Items</small>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="ios-card text-center p-3">
+            <i class="bi bi-cash-stack fs-2" style="color: #34C759;"></i>
+            <h3 class="fw-bold mb-0 mt-2">{{ total_value|naira }}</h3>
+            <small class="text-muted">Total Storage Value</small>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="ios-card text-center p-3">
+            <i class="bi bi-wallet2 fs-2" style="color: #FF9500;"></i>
+            <h3 class="fw-bold mb-0 mt-2">{{ total_paid|naira }}</h3>
+            <small class="text-muted">Total Amount Paid</small>
+        </div>
+    </div>
+</div>
+
+<div class="ios-card mb-4">
+    <form method="GET" action="{{ url_for('archive_history') }}">
+        <div class="row g-3">
+            <div class="col-md-8">
+                <div class="input-group">
+                    <input type="text" 
+                           name="search" 
+                           class="form-control search-bar" 
+                           placeholder="Search by customer name, phone, item description, or token..." 
+                           value="{{ search_query if search_query else '' }}">
+                    <button class="btn btn-primary ios-button" type="submit">
+                        <i class="bi bi-search"></i> Search
+                    </button>
+                    {% if search_query %}
+                    <a href="{{ url_for('archive_history', date=filter_date) }}" class="btn btn-outline-secondary ios-button">
+                        <i class="bi bi-x-lg"></i> Clear
+                    </a>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="col-md-4">
+                <select name="date" class="form-select search-bar" onchange="this.form.submit()">
+                    <option value="all" {% if filter_date == 'all' %}selected{% endif %}>All Time</option>
+                    <option value="today" {% if filter_date == 'today' %}selected{% endif %}>Today</option>
+                    <option value="week" {% if filter_date == 'week' %}selected{% endif %}>Last 7 Days</option>
+                    <option value="month" {% if filter_date == 'month' %}selected{% endif %}>Last 30 Days</option>
+                </select>
+            </div>
+        </div>
+    </form>
+</div>
+
+{% if archived_items %}
+    <div class="table-responsive">
+        <table class="table table-hover">
+            <thead class="table-light">
+                <tr>
+                    <th>Photo</th>
+                    <th>Item / Customer</th>
+                    <th>Payment</th>
+                    <th>Collected Date</th>
+                    <th>Archived Date</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in archived_items %}
+                <tr>
+                    <td>
+                        {% if item.photo_filename %}
+                        <img src="{{ url_for('static', filename='uploads/' + item.photo_filename) }}" 
+                             style="width: 50px; height: 50px; object-fit: cover; border-radius: 8px; cursor: pointer;"
+                             onclick="showImageModal('{{ url_for('static', filename='uploads/' + item.photo_filename) }}', '{{ item.description }}')">
+                        {% else %}
+                        <div class="bg-light d-flex align-items-center justify-content-center" style="width: 50px; height: 50px; border-radius: 8px;">
+                            <i class="bi bi-image text-muted"></i>
+                        </div>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <strong>{{ item.description }}</strong><br>
+                        <small class="text-muted">
+                            <i class="bi bi-person-circle"></i> {{ item.customer_name }}<br>
+                            <i class="bi bi-telephone"></i> {{ item.customer_phone }}
+                        </small>
+                        <div class="small text-muted">
+                            <i class="bi bi-tag"></i> Token: {{ item.unique_token[:12] }}...
+                        </div>
+                    </td>
+                    <td>
+                        <div><strong>Price:</strong> {{ item.storage_price|naira }}</div>
+                        <div><strong>Paid:</strong> <span class="text-success">{{ item.amount_paid|naira }}</span></div>
+                    </td>
+                    <td>
+                        <small>{{ item.collected_at.strftime('%Y-%m-%d %H:%M') if item.collected_at else '-' }}</small>
+                    </td>
+                    <td>
+                        <small>{{ item.archived_at.strftime('%Y-%m-%d %H:%M') }}</small>
+                        <div class="small text-muted">{{ item.archived_at|timesince }}</div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+{% else %}
+    <div class="ios-card text-center py-5">
+        <i class="bi bi-inbox fs-1 text-muted"></i>
+        <h5 class="mt-3">No archived items found</h5>
+        <p class="text-muted">
+            {% if search_query %}
+            No archives match "{{ search_query }}"
+            {% else %}
+            Items that are collected will appear here after 48 hours
+            {% endif %}
+        </p>
+    </div>
+{% endif %}
+
+<div class="modal fade" id="clearArchiveModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header bg-danger text-white">
+                <h5 class="modal-title">
+                    <i class="bi bi-exclamation-triangle-fill me-2"></i>Clear Old Archives
+                </h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="POST" action="{{ url_for('clear_old_archives') }}">
+                <div class="modal-body">
+                    <p>Delete archived items older than:</p>
+                    <div class="mb-3">
+                        <select name="days" class="form-select">
+                            <option value="30">30 days</option>
+                            <option value="60">60 days</option>
+                            <option value="90" selected>90 days</option>
+                            <option value="180">180 days</option>
+                            <option value="365">1 year</option>
+                        </select>
+                    </div>
+                    <div class="alert alert-warning small">
+                        <i class="bi bi-info-circle"></i> This action is permanent. Photos will also be deleted.
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-danger">Delete Old Archives</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+function showImageModal(url, title) {
+    const modal = document.createElement('div');
+    modal.className = 'modal fade';
+    modal.innerHTML = `
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">${title}</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body text-center">
+                    <img src="${url}" style="max-width: 100%; max-height: 60vh;">
+                </div>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(modal);
+    const modalInstance = new bootstrap.Modal(modal);
+    modalInstance.show();
+    modal.addEventListener('hidden.bs.modal', () => modal.remove());
+}
+</script>
+
+<style>
+.table td {
+    vertical-align: middle;
+}
+</style>
+{% endblock %}

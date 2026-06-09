@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-6">
+        <div class="mb-3">
+            <a href="{{ url_for('customer_list') }}" class="btn btn-link text-decoration-none p-0 d-inline-flex align-items-center" style="color: #007AFF;">
+                <i class="bi bi-arrow-left fs-5 me-1"></i>
+                <span>Back to Customers</span>
+            </a>
+        </div>
+        
+        <div class="ios-card">
+            <h3 class="fw-semibold"><i class="bi bi-person-badge me-2"></i>Customer Details</h3>
+            <p class="text-muted">Enter customer information to start storing items</p>
+            <form method="POST">
+                <div class="mb-3">
+                    <label class="form-label fw-medium">Full Name *</label>
+                    <input type="text" name="name" class="form-control search-bar" placeholder="John Appleseed" required>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-medium">Phone Number *</label>
+                    <input type="tel" name="phone" class="form-control search-bar" placeholder="+2348012345678" required>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-medium">Email (Optional)</label>
+                    <input type="email" name="email" class="form-control search-bar" placeholder="customer@example.com">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-medium">Address (Optional)</label>
+                    <textarea name="address" class="form-control search-bar" rows="2" placeholder="Enter customer address"></textarea>
+                </div>
+                <button type="submit" class="btn btn-primary ios-button ios-button-primary w-100">
+                    <i class="bi bi-arrow-right-circle"></i> Continue to Store Item
+                </button>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

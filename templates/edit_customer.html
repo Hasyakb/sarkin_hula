@@ -1,0 +1,183 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-7 col-lg-6">
+        <div class="mb-3">
+            <a href="{{ url_for('customer_detail', customer_id=customer.id) }}" class="btn btn-link text-decoration-none p-0 d-inline-flex align-items-center" style="color: #007AFF;">
+                <i class="bi bi-arrow-left fs-5 me-1"></i>
+                <span>Back to {{ customer.name }}</span>
+            </a>
+        </div>
+        
+        <div class="ios-card">
+            <div class="d-flex align-items-center mb-4">
+                <div class="rounded-circle bg-primary bg-opacity-10 p-3 me-3">
+                    <i class="bi bi-pencil-square fs-3" style="color: #007AFF;"></i>
+                </div>
+                <div>
+                    <h4 class="fw-bold mb-0">Edit Customer</h4>
+                    <p class="text-muted mb-0">Update customer information</p>
+                </div>
+            </div>
+            
+            <form method="POST" id="editCustomerForm">
+                <div class="mb-3">
+                    <label class="form-label fw-semibold">
+                        <i class="bi bi-person-fill me-1"></i> Full Name <span class="text-danger">*</span>
+                    </label>
+                    <input type="text" 
+                           name="name" 
+                           class="form-control search-bar" 
+                           value="{{ customer.name }}" 
+                           required
+                           placeholder="Enter customer's full name">
+                </div>
+                
+                <div class="mb-3">
+                    <label class="form-label fw-semibold">
+                        <i class="bi bi-telephone-fill me-1"></i> Phone Number <span class="text-danger">*</span>
+                    </label>
+                    <input type="tel" 
+                           name="phone" 
+                           class="form-control search-bar" 
+                           value="{{ customer.phone }}" 
+                           required
+                           placeholder="e.g., +234 801 234 5678">
+                </div>
+                
+                <div class="mb-3">
+                    <label class="form-label fw-semibold">
+                        <i class="bi bi-envelope-fill me-1"></i> Email Address
+                    </label>
+                    <input type="email" 
+                           name="email" 
+                           class="form-control search-bar" 
+                           value="{{ customer.email or '' }}"
+                           placeholder="customer@example.com">
+                </div>
+                
+                <div class="mb-4">
+                    <label class="form-label fw-semibold">
+                        <i class="bi bi-geo-alt-fill me-1"></i> Address
+                    </label>
+                    <textarea name="address" 
+                              class="form-control search-bar" 
+                              rows="3"
+                              placeholder="Enter full address">{{ customer.address or '' }}</textarea>
+                </div>
+                
+                <div class="bg-light rounded-3 p-3 mb-4">
+                    <h6 class="fw-bold mb-2">
+                        <i class="bi bi-graph-up me-1"></i>Customer Summary
+                    </h6>
+                    <div class="row text-center">
+                        <div class="col-4">
+                            <div class="small text-muted">Total Items</div>
+                            <div class="fw-bold">{{ customer.total_items_count() }}</div>
+                        </div>
+                        <div class="col-4">
+                            <div class="small text-muted">Active Items</div>
+                            <div class="fw-bold text-success">{{ customer.active_items_count() }}</div>
+                        </div>
+                        <div class="col-4">
+                            <div class="small text-muted">Total Unpaid</div>
+                            <div class="fw-bold text-danger">{{ customer.total_unpaid()|naira }}</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="d-flex gap-2">
+                    <button type="submit" class="btn btn-primary ios-button flex-grow-1">
+                        <i class="bi bi-check-lg me-1"></i> Save Changes
+                    </button>
+                    <a href="{{ url_for('customer_detail', customer_id=customer.id) }}" 
+                       class="btn btn-outline-secondary ios-button">
+                        <i class="bi bi-x-lg me-1"></i> Cancel
+                    </a>
+                </div>
+            </form>
+            
+            <hr class="my-4">
+            
+            <div class="border border-danger rounded-3 p-3">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="fw-bold text-danger mb-1">
+                            <i class="bi bi-exclamation-triangle-fill me-1"></i>Danger Zone
+                        </h6>
+                        <p class="small text-muted mb-0">Permanently delete this customer and all associated items</p>
+                    </div>
+                    <button type="button" 
+                            class="btn btn-outline-danger btn-sm" 
+                            data-bs-toggle="modal" 
+                            data-bs-target="#deleteModal">
+                        <i class="bi bi-trash3"></i> Delete Customer
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="deleteModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header bg-danger text-white">
+                <h5 class="modal-title fw-bold">
+                    <i class="bi bi-exclamation-triangle-fill me-2"></i>Delete Customer
+                </h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="text-center mb-3">
+                    <i class="bi bi-person-x fs-1 text-danger"></i>
+                </div>
+                <p class="fw-bold mb-2">Are you sure you want to delete <span class="text-danger">{{ customer.name }}</span>?</p>
+                <p class="text-muted small">This action cannot be undone. The following will be permanently deleted:</p>
+                <ul class="small">
+                    <li>Customer profile information</li>
+                    <li>{{ customer.total_items_count() }} stored item(s) including photos</li>
+                    <li>All payment records for this customer</li>
+                </ul>
+                <div class="alert alert-warning small mb-0">
+                    <i class="bi bi-info-circle"></i> To preserve records, consider marking items as collected instead of deleting.
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <form method="POST" action="{{ url_for('delete_customer', customer_id=customer.id) }}" style="display: inline;">
+                    <button type="submit" class="btn btn-danger" onclick="return confirm('Permanently delete this customer?')">
+                        <i class="bi bi-trash3"></i> Yes, Delete Customer
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const form = document.getElementById('editCustomerForm');
+    let formChanged = false;
+    
+    const inputs = form.querySelectorAll('input, textarea');
+    inputs.forEach(input => {
+        const initialValue = input.value;
+        input.addEventListener('change', function() {
+            if (this.value !== initialValue) {
+                formChanged = true;
+            }
+        });
+    });
+    
+    window.addEventListener('beforeunload', function(e) {
+        if (formChanged) {
+            e.preventDefault();
+            e.returnValue = 'You have unsaved changes. Are you sure you want to leave?';
+            return e.returnValue;
+        }
+    });
+});
+</script>
+{% endblock %}

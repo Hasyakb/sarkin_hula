@@ -1,0 +1,78 @@
+<!-- templates/customer_items.html -->
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center flex-wrap mb-3">
+    <div>
+        <h3><i class="bi bi-person-circle me-2"></i>{{ customer.name }}</h3>
+        <p class="text-muted">{{ customer.phone }} | {{ customer.email or 'No email' }}</p>
+    </div>
+    <a href="{{ url_for('store_item', customer_id=customer.id) }}" class="btn btn-primary ios-button">
+        <i class="bi bi-plus-lg"></i> New Item
+    </a>
+</div>
+
+{% if items %}
+    {% for item in items %}
+    <div class="ios-card">
+        <div class="row align-items-center">
+            <div class="col-auto">
+                {% if item.photo_filename %}
+                <img src="{{ url_for('static', filename='uploads/' + item.photo_filename) }}" class="item-photo" alt="Item">
+                {% else %}
+                <div class="item-photo bg-light d-flex align-items-center justify-content-center">
+                    <i class="bi bi-image fs-2 text-muted"></i>
+                </div>
+                {% endif %}
+            </div>
+            <div class="col">
+                <div class="d-flex justify-content-between align-items-start flex-wrap">
+                    <div>
+                        <strong>{{ item.description }}</strong>
+                        <div class="small text-muted">Token: {{ item.unique_token[:8] }}...</div>
+                        <div class="mt-1">
+                            {% if item.status == 'active' %}
+                                <span class="badge bg-success badge-ios">Active</span>
+                            {% elif item.status == 'collected' %}
+                                <span class="badge bg-secondary badge-ios">Collected</span>
+                            {% else %}
+                                <span class="badge bg-danger badge-ios">Expired</span>
+                            {% endif %}
+                            <span class="badge bg-info badge-ios ms-1">
+                                <i class="bi bi-clock"></i> {{ item.time_remaining() }}
+                            </span>
+                        </div>
+                    </div>
+                    <div class="text-end mt-2 mt-sm-0">
+                        <div>Price: ${{ "%.2f"|format(item.storage_price) }}</div>
+                        <div>Paid: ${{ "%.2f"|format(item.amount_paid) }}</div>
+                        <div class="fw-bold">Remaining: ${{ "%.2f"|format(item.remaining_balance()) }}</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-12 col-md-auto mt-3 mt-md-0">
+                <div class="d-flex gap-2">
+                    {% if not item.is_fully_paid() and item.status == 'active' %}
+                    <a href="{{ url_for('make_payment', token=item.unique_token) }}" class="btn btn-sm btn-outline-primary">
+                        <i class="bi bi-credit-card"></i> Pay
+                    </a>
+                    {% endif %}
+                    {% if item.is_fully_paid() and item.status == 'active' %}
+                    <form method="POST" action="{{ url_for('collect_item', token=item.unique_token) }}" style="display: inline;">
+                        <button type="submit" class="btn btn-sm btn-success">
+                            <i class="bi bi-check2-circle"></i> Collect
+                        </button>
+                    </form>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+{% else %}
+    <div class="ios-card text-center py-5">
+        <i class="bi bi-inbox fs-1 text-muted"></i>
+        <p class="mt-2">No items stored yet</p>
+        <a href="{{ url_for('store_item', customer_id=customer.id) }}" class="btn btn-primary">Store First Item</a>
+    </div>
+{% endif %}
+{% endblock %}

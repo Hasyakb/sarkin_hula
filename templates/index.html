@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row justify-content-center mt-4">
+    <div class="col-md-10 col-lg-8">
+        <div class="ios-card text-center" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none;">
+            <i class="bi bi-box-seam" style="font-size: 72px;"></i>
+            <h1 class="mt-3 fw-bold display-5">SmartLocker Store</h1>
+            <p class="lead mt-2">Secure Item Storage & Management System</p>
+            <p class="mb-0">💰 All prices in <strong>Nigerian Naira (₦)</strong></p>
+        </div>
+        
+        <div class="row g-3 mt-3">
+            <div class="col-md-4">
+                <div class="ios-card text-center h-100">
+                    <i class="bi bi-camera fs-1" style="color: #007AFF;"></i>
+                    <h5 class="fw-bold mt-2">Snap & Store</h5>
+                    <p class="small text-muted">Take photos of items for secure identification</p>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="ios-card text-center h-100">
+                    <i class="bi bi-credit-card fs-1" style="color: #34C759;"></i>
+                    <h5 class="fw-bold mt-2">100% Payment</h5>
+                    <p class="small text-muted">Full payment required before collection</p>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="ios-card text-center h-100">
+                    <i class="bi bi-clock-history fs-1" style="color: #FF9500;"></i>
+                    <h5 class="fw-bold mt-2">48-Hour Storage</h5>
+                    <p class="small text-muted">Items auto-delete after 48 hours if uncollected</p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="ios-card mt-3">
+            <h4 class="fw-bold text-center mb-4">
+                <i class="bi bi-lightning-charge-fill me-2" style="color: #FF9500;"></i>
+                Quick Actions
+            </h4>
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <a href="{{ url_for('customer_list') }}" class="btn btn-primary ios-button w-100">
+                        <i class="bi bi-people-fill me-2"></i>
+                        View All Customers
+                    </a>
+                </div>
+                <div class="col-md-6">
+                    <a href="{{ url_for('new_customer') }}" class="btn btn-success ios-button ios-button-success w-100">
+                        <i class="bi bi-person-plus-fill me-2"></i>
+                        Register New Customer
+                    </a>
+                </div>
+            </div>
+        </div>
+        
+        <div class="ios-card mt-3">
+            <h5 class="fw-bold mb-3">
+                <i class="bi bi-graph-up me-2"></i>
+                Quick Stats
+            </h5>
+            <div class="row text-center">
+                <div class="col-4">
+                    <div class="bg-light rounded-3 p-2">
+                        <i class="bi bi-box-seam fs-4" style="color: #007AFF;"></i>
+                        <div class="fw-bold mt-1" id="totalItems">--</div>
+                        <small class="text-muted">Total Items</small>
+                    </div>
+                </div>
+                <div class="col-4">
+                    <div class="bg-light rounded-3 p-2">
+                        <i class="bi bi-check-circle fs-4" style="color: #34C759;"></i>
+                        <div class="fw-bold mt-1" id="activeItems">--</div>
+                        <small class="text-muted">Active</small>
+                    </div>
+                </div>
+                <div class="col-4">
+                    <div class="bg-light rounded-3 p-2">
+                        <i class="bi bi-wallet2 fs-4" style="color: #FF3B30;"></i>
+                        <div class="fw-bold mt-1" id="unpaidAmount">--</div>
+                        <small class="text-muted">Unpaid</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <script>
+            fetch('/api/stats')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('totalItems').innerText = data.total_items || 0;
+                    document.getElementById('activeItems').innerText = data.active_items || 0;
+                    document.getElementById('unpaidAmount').innerText = '₦' + (data.total_unpaid || 0).toLocaleString();
+                })
+                .catch(err => console.log('Stats not available'));
+        </script>
+        
+        <div class="ios-card mt-3">
+            <h5 class="fw-bold mb-3 text-center">
+                <i class="bi bi-info-circle-fill me-2" style="color: #007AFF;"></i>
+                How It Works
+            </h5>
+            <div class="row">
+                <div class="col-md-3 col-6 text-center mb-3">
+                    <div class="rounded-circle bg-primary bg-opacity-10 d-inline-flex p-3 mb-2">
+                        <span class="fw-bold h4 mb-0" style="color: #007AFF;">1</span>
+                    </div>
+                    <p class="small fw-bold mb-0">Register</p>
+                    <small class="text-muted">Add customer details</small>
+                </div>
+                <div class="col-md-3 col-6 text-center mb-3">
+                    <div class="rounded-circle bg-success bg-opacity-10 d-inline-flex p-3 mb-2">
+                        <span class="fw-bold h4 mb-0" style="color: #34C759;">2</span>
+                    </div>
+                    <p class="small fw-bold mb-0">Store Item</p>
+                    <small class="text-muted">Snap photo & set price</small>
+                </div>
+                <div class="col-md-3 col-6 text-center mb-3">
+                    <div class="rounded-circle bg-warning bg-opacity-10 d-inline-flex p-3 mb-2">
+                        <span class="fw-bold h4 mb-0" style="color: #FF9500;">3</span>
+                    </div>
+                    <p class="small fw-bold mb-0">Make Payment</p>
+                    <small class="text-muted">Full payment required</small>
+                </div>
+                <div class="col-md-3 col-6 text-center mb-3">
+                    <div class="rounded-circle bg-info bg-opacity-10 d-inline-flex p-3 mb-2">
+                        <span class="fw-bold h4 mb-0" style="color: #007AFF;">4</span>
+                    </div>
+                    <p class="small fw-bold mb-0">Collect</p>
+                    <small class="text-muted">Pick up after full payment</small>
+                </div>
+            </div>
+        </div>
+        
+        <div class="alert alert-warning mt-3 text-center small" role="alert">
+            <i class="bi bi-exclamation-triangle-fill me-2"></i>
+            <strong>Important:</strong> Items not collected within 48 hours will be automatically deleted from the system. Full payment (100%) required before collection.
+        </div>
+    </div>
+</div>
+
+<style>
+    .display-5 {
+        font-size: 2.5rem;
+        font-weight: 700;
+    }
+    
+    @media (max-width: 768px) {
+        .display-5 {
+            font-size: 1.8rem;
+        }
+    }
+    
+    .rounded-circle {
+        width: 50px;
+        height: 50px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+    }
+</style>
+{% endblock %}
