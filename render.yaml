@@ -9,4 +9,10 @@ services:
         value: 3.11.0
       - key: SECRET_KEY
         generateValue: true
+      - key: FLASK_ENV
+        value: production
     plan: free
+    disk:
+      name: uploads
+      mountPath: /opt/render/project/src/static/uploads
+      sizeGB: 1
