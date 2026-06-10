@@ -1,31 +1,45 @@
 # app.py
 import os
+import sys
 import uuid
 import hashlib
+import logging
 from datetime import datetime, timedelta
 from functools import wraps
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, abort
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, abort, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from werkzeug.utils import secure_filename
 from sqlalchemy.orm import joinedload
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 # ---------- App Configuration ----------
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your-secret-key-change-in-production')
 
-# ✅ FIXED: Use PostgreSQL on Render, SQLite locally
+# Database configuration - Fixed for Render
 database_url = os.environ.get('DATABASE_URL')
 if database_url:
     # Fix for Render's PostgreSQL URL (needs to remove postgres:// vs postgresql://)
     if database_url.startswith('postgres://'):
         database_url = database_url.replace('postgres://', 'postgresql://', 1)
     app.config['SQLALCHEMY_DATABASE_URI'] = database_url
+    logger.info("✅ Using PostgreSQL database")
 else:
     # Local development with SQLite
     app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///store.db'
+    logger.info("⚠️ Using SQLite (local development)")
 
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    'pool_pre_ping': True,  # Handle dropped connections
+    'pool_recycle': 300,    # Recycle connections every 5 minutes
+    'pool_size': 5,         # Number of connections to keep
+    'max_overflow': 10      # Extra connections when needed
+}
 
 # Upload settings
 UPLOAD_FOLDER = 'static/uploads'
@@ -35,14 +49,10 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max
 
 # Ensure upload folder exists
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+logger.info(f"✅ Upload folder ready: {os.path.abspath(UPLOAD_FOLDER)}")
 
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
-
-# ✅ CREATE DATABASE TABLES AUTOMATICALLY
-with app.app_context():
-    db.create_all()
-    print("✅ Database tables verified/created successfully")
 
 # ---------- Database Models ----------
 class Customer(db.Model):
@@ -124,6 +134,21 @@ class ArchivedItem(db.Model):
     def __repr__(self):
         return f'<ArchivedItem {self.description} - {self.customer_name}>'
 
+# Create tables on app start (for first-time deployment)
+def init_db():
+    """Initialize database tables if they don't exist"""
+    try:
+        with app.app_context():
+            # Check if tables exist
+            db.create_all()
+            logger.info("✅ Database tables verified/created successfully")
+            
+            # Run any initial data setup here if needed
+            return True
+    except Exception as e:
+        logger.error(f"❌ Database initialization error: {str(e)}")
+        return False
+
 # ---------- Helper Functions ----------
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -166,6 +191,10 @@ def timesince(dt, default="just now"):
 def auto_archive_collected_items():
     """Automatically archive items that were collected more than 48 hours ago"""
     try:
+        # Skip if no database tables yet
+        if not db.engine.dialect.has_table(db.engine, 'items'):
+            return 0
+            
         cutoff_time = datetime.utcnow() - timedelta(hours=48)
         
         # Find collected items older than 48 hours that haven't been archived yet
@@ -202,11 +231,11 @@ def auto_archive_collected_items():
         
         if archived_count > 0:
             db.session.commit()
-            print(f"[Auto-Archive] Archived {archived_count} collected items")
+            logger.info(f"[Auto-Archive] Archived {archived_count} collected items")
         
         return archived_count
     except Exception as e:
-        print(f"[Auto-Archive Error] {str(e)}")
+        logger.error(f"[Auto-Archive Error] {str(e)}")
         db.session.rollback()
         return 0
 
@@ -215,285 +244,366 @@ def auto_archive_collected_items():
 def index():
     return render_template('index.html')
 
+@app.route('/health')
+def health_check():
+    """Health check endpoint for Render"""
+    try:
+        # Check database connection
+        db.session.execute('SELECT 1')
+        return jsonify({
+            'status': 'healthy',
+            'database': 'connected',
+            'timestamp': datetime.utcnow().isoformat()
+        }), 200
+    except Exception as e:
+        logger.error(f"Health check failed: {str(e)}")
+        return jsonify({
+            'status': 'unhealthy',
+            'error': str(e),
+            'timestamp': datetime.utcnow().isoformat()
+        }), 500
+
 @app.route('/api/stats')
 def api_stats():
     """Return quick statistics for the dashboard"""
-    total_items = Item.query.count()
-    active_items = Item.query.filter_by(status='active').count()
-    total_unpaid = sum(item.remaining_balance() for item in Item.query.filter_by(status='active').all())
-    
-    return jsonify({
-        'total_items': total_items,
-        'active_items': active_items,
-        'total_unpaid': total_unpaid
-    })
+    try:
+        total_items = Item.query.count()
+        active_items = Item.query.filter_by(status='active').count()
+        total_unpaid = sum(item.remaining_balance() for item in Item.query.filter_by(status='active').all())
+        
+        return jsonify({
+            'total_items': total_items,
+            'active_items': active_items,
+            'total_unpaid': total_unpaid
+        })
+    except Exception as e:
+        logger.error(f"API stats error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 # ---------- Customer Routes ----------
 @app.route('/customers')
 def customer_list():
     """Display all customers with search functionality"""
-    search_query = request.args.get('search', '').strip()
-    
-    query = Customer.query
-    
-    if search_query:
-        query = query.filter(
-            db.or_(
-                Customer.name.ilike(f'%{search_query}%'),
-                Customer.phone.ilike(f'%{search_query}%'),
-                Customer.email.ilike(f'%{search_query}%')
+    try:
+        search_query = request.args.get('search', '').strip()
+        
+        query = Customer.query
+        
+        if search_query:
+            query = query.filter(
+                db.or_(
+                    Customer.name.ilike(f'%{search_query}%'),
+                    Customer.phone.ilike(f'%{search_query}%'),
+                    Customer.email.ilike(f'%{search_query}%')
+                )
             )
-        )
-    
-    customers = query.order_by(Customer.created_at.desc()).all()
-    
-    return render_template('customer_list.html', customers=customers, search_query=search_query)
+        
+        customers = query.order_by(Customer.created_at.desc()).all()
+        
+        return render_template('customer_list.html', customers=customers, search_query=search_query)
+    except Exception as e:
+        logger.error(f"Customer list error: {str(e)}")
+        flash('Error loading customers', 'danger')
+        return render_template('customer_list.html', customers=[], search_query='')
 
 @app.route('/customer/<int:customer_id>')
 def customer_detail(customer_id):
     """View customer details and their items"""
-    customer = Customer.query.get_or_404(customer_id)
-    items = Item.query.filter_by(customer_id=customer_id).order_by(Item.stored_at.desc()).all()
-    
-    # Update expired status
-    for item in items:
-        if item.is_expired() and item.status == 'active':
-            item.status = 'expired'
-            db.session.commit()
-    
-    return render_template('customer_detail.html', customer=customer, items=items)
+    try:
+        customer = Customer.query.get_or_404(customer_id)
+        items = Item.query.filter_by(customer_id=customer_id).order_by(Item.stored_at.desc()).all()
+        
+        # Update expired status
+        for item in items:
+            if item.is_expired() and item.status == 'active':
+                item.status = 'expired'
+                db.session.commit()
+        
+        return render_template('customer_detail.html', customer=customer, items=items)
+    except Exception as e:
+        logger.error(f"Customer detail error: {str(e)}")
+        flash('Error loading customer details', 'danger')
+        return redirect(url_for('customer_list'))
 
 @app.route('/customer/new', methods=['GET', 'POST'])
 def new_customer():
-    if request.method == 'POST':
-        name = request.form.get('name')
-        phone = request.form.get('phone')
-        email = request.form.get('email')
-        address = request.form.get('address')
+    try:
+        if request.method == 'POST':
+            name = request.form.get('name')
+            phone = request.form.get('phone')
+            email = request.form.get('email')
+            address = request.form.get('address')
+            
+            if not name or not phone:
+                flash('Name and phone are required', 'danger')
+                return redirect(url_for('new_customer'))
+            
+            # Check if customer exists
+            existing = Customer.query.filter_by(phone=phone).first()
+            if existing:
+                flash(f'Customer {existing.name} already exists with this phone number!', 'warning')
+                return redirect(url_for('customer_detail', customer_id=existing.id))
+            
+            customer = Customer(name=name, phone=phone, email=email, address=address)
+            db.session.add(customer)
+            db.session.commit()
+            
+            flash(f'Customer {name} created successfully!', 'success')
+            return redirect(url_for('store_item', customer_id=customer.id))
         
-        if not name or not phone:
-            flash('Name and phone are required', 'danger')
-            return redirect(url_for('new_customer'))
-        
-        # Check if customer exists
-        existing = Customer.query.filter_by(phone=phone).first()
-        if existing:
-            flash(f'Customer {existing.name} already exists with this phone number!', 'warning')
-            return redirect(url_for('customer_detail', customer_id=existing.id))
-        
-        customer = Customer(name=name, phone=phone, email=email, address=address)
-        db.session.add(customer)
-        db.session.commit()
-        
-        flash(f'Customer {name} created successfully!', 'success')
-        return redirect(url_for('store_item', customer_id=customer.id))
-    
-    return render_template('new_customer.html')
+        return render_template('new_customer.html')
+    except Exception as e:
+        logger.error(f"New customer error: {str(e)}")
+        db.session.rollback()
+        flash('Error creating customer', 'danger')
+        return redirect(url_for('customer_list'))
 
 @app.route('/customer/<int:customer_id>/edit', methods=['GET', 'POST'])
 def edit_customer(customer_id):
-    customer = Customer.query.get_or_404(customer_id)
-    
-    if request.method == 'POST':
-        customer.name = request.form.get('name')
-        customer.phone = request.form.get('phone')
-        customer.email = request.form.get('email')
-        customer.address = request.form.get('address')
+    try:
+        customer = Customer.query.get_or_404(customer_id)
         
-        db.session.commit()
-        flash('Customer information updated!', 'success')
-        return redirect(url_for('customer_detail', customer_id=customer.id))
-    
-    return render_template('edit_customer.html', customer=customer)
+        if request.method == 'POST':
+            customer.name = request.form.get('name')
+            customer.phone = request.form.get('phone')
+            customer.email = request.form.get('email')
+            customer.address = request.form.get('address')
+            
+            db.session.commit()
+            flash('Customer information updated!', 'success')
+            return redirect(url_for('customer_detail', customer_id=customer.id))
+        
+        return render_template('edit_customer.html', customer=customer)
+    except Exception as e:
+        logger.error(f"Edit customer error: {str(e)}")
+        db.session.rollback()
+        flash('Error updating customer', 'danger')
+        return redirect(url_for('customer_detail', customer_id=customer_id))
 
 @app.route('/customer/<int:customer_id>/delete', methods=['POST'])
 def delete_customer(customer_id):
     """Delete a customer and all their items"""
-    customer = Customer.query.get_or_404(customer_id)
-    
-    # Delete photos from filesystem
-    for item in customer.items:
-        if item.photo_filename:
-            photo_path = os.path.join(app.config['UPLOAD_FOLDER'], item.photo_filename)
-            if os.path.exists(photo_path):
-                os.remove(photo_path)
-    
-    db.session.delete(customer)
-    db.session.commit()
-    
-    flash(f'Customer {customer.name} and all their items have been deleted', 'success')
-    return redirect(url_for('customer_list'))
+    try:
+        customer = Customer.query.get_or_404(customer_id)
+        
+        # Delete photos from filesystem
+        for item in customer.items:
+            if item.photo_filename:
+                photo_path = os.path.join(app.config['UPLOAD_FOLDER'], item.photo_filename)
+                if os.path.exists(photo_path):
+                    os.remove(photo_path)
+        
+        db.session.delete(customer)
+        db.session.commit()
+        
+        flash(f'Customer {customer.name} and all their items have been deleted', 'success')
+        return redirect(url_for('customer_list'))
+    except Exception as e:
+        logger.error(f"Delete customer error: {str(e)}")
+        db.session.rollback()
+        flash('Error deleting customer', 'danger')
+        return redirect(url_for('customer_list'))
 
 @app.route('/store/<int:customer_id>', methods=['GET', 'POST'])
 def store_item(customer_id):
-    customer = Customer.query.get_or_404(customer_id)
-    
-    if request.method == 'POST':
-        description = request.form.get('description')
-        storage_price = float(request.form.get('storage_price', 10000))
-        amount_paid = float(request.form.get('amount_paid', 0))
+    try:
+        customer = Customer.query.get_or_404(customer_id)
         
-        # Handle photo upload
-        photo_file = request.files.get('photo')
-        photo_filename = None
-        if photo_file and allowed_file(photo_file.filename):
-            ext = photo_file.filename.rsplit('.', 1)[1].lower()
-            filename = f"{uuid.uuid4().hex}.{ext}"
-            photo_file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-            photo_filename = filename
+        if request.method == 'POST':
+            description = request.form.get('description')
+            storage_price = float(request.form.get('storage_price', 10000))
+            amount_paid = float(request.form.get('amount_paid', 0))
+            
+            # Handle photo upload
+            photo_file = request.files.get('photo')
+            photo_filename = None
+            if photo_file and allowed_file(photo_file.filename):
+                ext = photo_file.filename.rsplit('.', 1)[1].lower()
+                filename = f"{uuid.uuid4().hex}.{ext}"
+                photo_file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+                photo_filename = filename
+            
+            item = Item(
+                description=description,
+                photo_filename=photo_filename,
+                storage_price=storage_price,
+                amount_paid=amount_paid,
+                payment_type='full',  # Always full payment
+                customer_id=customer.id
+            )
+            db.session.add(item)
+            db.session.commit()
+            
+            flash(f'Item stored successfully! Token: {item.unique_token[:8]}...', 'success')
+            return redirect(url_for('customer_detail', customer_id=customer.id))
         
-        item = Item(
-            description=description,
-            photo_filename=photo_filename,
-            storage_price=storage_price,
-            amount_paid=amount_paid,
-            payment_type='full',  # Always full payment
-            customer_id=customer.id
-        )
-        db.session.add(item)
-        db.session.commit()
-        
-        flash(f'Item stored successfully! Token: {item.unique_token[:8]}...', 'success')
-        return redirect(url_for('customer_detail', customer_id=customer.id))
-    
-    return render_template('store_item.html', customer=customer)
+        return render_template('store_item.html', customer=customer)
+    except Exception as e:
+        logger.error(f"Store item error: {str(e)}")
+        db.session.rollback()
+        flash('Error storing item', 'danger')
+        return redirect(url_for('customer_detail', customer_id=customer_id))
 
 @app.route('/item/<token>/pay', methods=['GET', 'POST'])
 def make_payment(token):
-    item = Item.query.filter_by(unique_token=token).first_or_404()
-    customer = item.customer
-    
-    if request.method == 'POST':
-        amount = float(request.form.get('amount', 0))
-        if amount <= 0:
-            flash('Amount must be positive', 'danger')
-        else:
-            item.amount_paid += amount
-            if item.is_fully_paid():
-                flash(f'Payment complete! Item is now fully paid.', 'success')
+    try:
+        item = Item.query.filter_by(unique_token=token).first_or_404()
+        customer = item.customer
+        
+        if request.method == 'POST':
+            amount = float(request.form.get('amount', 0))
+            if amount <= 0:
+                flash('Amount must be positive', 'danger')
             else:
-                remaining = item.remaining_balance()
-                flash(f'Payment of ₦{amount:,.2f} received! Remaining: ₦{remaining:,.2f}', 'success')
-            db.session.commit()
-        return redirect(url_for('customer_detail', customer_id=customer.id))
-    
-    return render_template('make_payment.html', item=item, customer=customer)
+                item.amount_paid += amount
+                if item.is_fully_paid():
+                    flash(f'Payment complete! Item is now fully paid.', 'success')
+                else:
+                    remaining = item.remaining_balance()
+                    flash(f'Payment of ₦{amount:,.2f} received! Remaining: ₦{remaining:,.2f}', 'success')
+                db.session.commit()
+            return redirect(url_for('customer_detail', customer_id=customer.id))
+        
+        return render_template('make_payment.html', item=item, customer=customer)
+    except Exception as e:
+        logger.error(f"Make payment error: {str(e)}")
+        db.session.rollback()
+        flash('Error processing payment', 'danger')
+        return redirect(url_for('dashboard'))
 
 @app.route('/item/<token>/collect', methods=['POST'])
 def collect_item(token):
-    item = Item.query.filter_by(unique_token=token).first_or_404()
-    
-    if not item.is_fully_paid():
-        flash('Cannot collect: Full payment required first', 'danger')
+    try:
+        item = Item.query.filter_by(unique_token=token).first_or_404()
+        
+        if not item.is_fully_paid():
+            flash('Cannot collect: Full payment required first', 'danger')
+            return redirect(url_for('customer_detail', customer_id=item.customer.id))
+        
+        if item.status == 'collected':
+            flash('Item already collected', 'warning')
+        else:
+            item.status = 'collected'
+            item.collected_at = datetime.utcnow()
+            db.session.commit()
+            flash('Item collected successfully!', 'success')
+        
         return redirect(url_for('customer_detail', customer_id=item.customer.id))
-    
-    if item.status == 'collected':
-        flash('Item already collected', 'warning')
-    else:
-        item.status = 'collected'
-        item.collected_at = datetime.utcnow()
-        db.session.commit()
-        flash('Item collected successfully!', 'success')
-    
-    return redirect(url_for('customer_detail', customer_id=item.customer.id))
+    except Exception as e:
+        logger.error(f"Collect item error: {str(e)}")
+        db.session.rollback()
+        flash('Error collecting item', 'danger')
+        return redirect(url_for('dashboard'))
 
 # ---------- Dashboard (public, no login required) ----------
 @app.route('/dashboard')
 def dashboard():
     """Public dashboard to view all items"""
-    # Auto-archive collected items older than 48 hours
-    auto_archive_collected_items()
-    
-    # Search and filter parameters
-    search_query = request.args.get('search', '').strip()
-    filter_status = request.args.get('status', 'all')
-    filter_payment = request.args.get('payment', 'all')
-    
-    # Base query with eager loading
-    query = Item.query.options(joinedload(Item.customer))
-    
-    # Apply search (customer name, phone, item description, token)
-    if search_query:
-        query = query.join(Customer).filter(
-            db.or_(
-                Customer.name.ilike(f'%{search_query}%'),
-                Customer.phone.ilike(f'%{search_query}%'),
-                Item.description.ilike(f'%{search_query}%'),
-                Item.unique_token.ilike(f'%{search_query}%')
+    try:
+        # Auto-archive collected items older than 48 hours
+        auto_archive_collected_items()
+        
+        # Search and filter parameters
+        search_query = request.args.get('search', '').strip()
+        filter_status = request.args.get('status', 'all')
+        filter_payment = request.args.get('payment', 'all')
+        
+        # Base query with eager loading
+        query = Item.query.options(joinedload(Item.customer))
+        
+        # Apply search (customer name, phone, item description, token)
+        if search_query:
+            query = query.join(Customer).filter(
+                db.or_(
+                    Customer.name.ilike(f'%{search_query}%'),
+                    Customer.phone.ilike(f'%{search_query}%'),
+                    Item.description.ilike(f'%{search_query}%'),
+                    Item.unique_token.ilike(f'%{search_query}%')
+                )
             )
-        )
-    
-    # Apply status filter
-    if filter_status != 'all':
-        query = query.filter(Item.status == filter_status)
-    
-    # Apply payment filter
-    if filter_payment == 'paid':
-        # Get all items and filter those that are fully paid
-        items_list = query.all()
-        items = [item for item in items_list if item.is_fully_paid()]
-    elif filter_payment == 'unpaid':
-        items_list = query.all()
-        items = [item for item in items_list if not item.is_fully_paid()]
-    else:
-        items = query.all()
-    
-    # If we used query.all() above, sort it
-    if filter_payment in ['paid', 'unpaid']:
-        items = sorted(items, key=lambda x: x.stored_at, reverse=True)
-    else:
-        items = query.order_by(Item.stored_at.desc()).all()
-    
-    # Update expired statuses
-    for item in items:
-        if item.is_expired() and item.status == 'active':
-            item.status = 'expired'
-            db.session.commit()
-    
-    # Stats for dashboard
-    total_items = Item.query.count()
-    active_items = Item.query.filter_by(status='active').count()
-    collected_items = Item.query.filter_by(status='collected').count()
-    expired_items = Item.query.filter_by(status='expired').count()
-    total_unpaid_balance = sum(item.remaining_balance() for item in Item.query.filter_by(status='active').all())
-    
-    # Customer stats
-    total_customers = Customer.query.count()
-    
-    return render_template('dashboard.html',
-                         items=items,
-                         search_query=search_query,
-                         filter_status=filter_status,
-                         filter_payment=filter_payment,
-                         total_items=total_items,
-                         active_items=active_items,
-                         collected_items=collected_items,
-                         expired_items=expired_items,
-                         total_unpaid_balance=total_unpaid_balance,
-                         total_customers=total_customers)
+        
+        # Apply status filter
+        if filter_status != 'all':
+            query = query.filter(Item.status == filter_status)
+        
+        # Apply payment filter
+        if filter_payment == 'paid':
+            # Get all items and filter those that are fully paid
+            items_list = query.all()
+            items = [item for item in items_list if item.is_fully_paid()]
+        elif filter_payment == 'unpaid':
+            items_list = query.all()
+            items = [item for item in items_list if not item.is_fully_paid()]
+        else:
+            items = query.all()
+        
+        # If we used query.all() above, sort it
+        if filter_payment in ['paid', 'unpaid']:
+            items = sorted(items, key=lambda x: x.stored_at, reverse=True)
+        else:
+            items = query.order_by(Item.stored_at.desc()).all()
+        
+        # Update expired statuses
+        for item in items:
+            if item.is_expired() and item.status == 'active':
+                item.status = 'expired'
+                db.session.commit()
+        
+        # Stats for dashboard
+        total_items = Item.query.count()
+        active_items = Item.query.filter_by(status='active').count()
+        collected_items = Item.query.filter_by(status='collected').count()
+        expired_items = Item.query.filter_by(status='expired').count()
+        total_unpaid_balance = sum(item.remaining_balance() for item in Item.query.filter_by(status='active').all())
+        
+        # Customer stats
+        total_customers = Customer.query.count()
+        
+        return render_template('dashboard.html',
+                             items=items,
+                             search_query=search_query,
+                             filter_status=filter_status,
+                             filter_payment=filter_payment,
+                             total_items=total_items,
+                             active_items=active_items,
+                             collected_items=collected_items,
+                             expired_items=expired_items,
+                             total_unpaid_balance=total_unpaid_balance,
+                             total_customers=total_customers)
+    except Exception as e:
+        logger.error(f"Dashboard error: {str(e)}")
+        flash('Error loading dashboard', 'danger')
+        return render_template('dashboard.html', items=[], total_items=0, active_items=0, 
+                             collected_items=0, expired_items=0, total_unpaid_balance=0, total_customers=0)
 
 @app.route('/delete-expired', methods=['POST'])
 def delete_expired_items():
     """Delete all expired items permanently"""
-    expired_items = Item.query.filter_by(status='expired').all()
-    
-    if not expired_items:
-        flash('No expired items to delete', 'info')
+    try:
+        expired_items = Item.query.filter_by(status='expired').all()
+        
+        if not expired_items:
+            flash('No expired items to delete', 'info')
+            return redirect(url_for('dashboard'))
+        
+        # Delete photos from filesystem
+        for item in expired_items:
+            if item.photo_filename:
+                photo_path = os.path.join(app.config['UPLOAD_FOLDER'], item.photo_filename)
+                if os.path.exists(photo_path):
+                    os.remove(photo_path)
+        
+        # Delete items from database
+        count = Item.query.filter_by(status='expired').delete()
+        db.session.commit()
+        
+        flash(f'Successfully deleted {count} expired item(s)', 'success')
         return redirect(url_for('dashboard'))
-    
-    # Delete photos from filesystem
-    for item in expired_items:
-        if item.photo_filename:
-            photo_path = os.path.join(app.config['UPLOAD_FOLDER'], item.photo_filename)
-            if os.path.exists(photo_path):
-                os.remove(photo_path)
-    
-    # Delete items from database
-    count = Item.query.filter_by(status='expired').delete()
-    db.session.commit()
-    
-    flash(f'Successfully deleted {count} expired item(s)', 'success')
-    return redirect(url_for('dashboard'))
+    except Exception as e:
+        logger.error(f"Delete expired items error: {str(e)}")
+        db.session.rollback()
+        flash('Error deleting expired items', 'danger')
+        return redirect(url_for('dashboard'))
 
 # ---------- Archive Routes ----------
 @app.route('/archive')
@@ -543,7 +653,7 @@ def archive_history():
                              total_value=total_value,
                              total_paid=total_paid)
     except Exception as e:
-        print(f"Archive error: {str(e)}")
+        logger.error(f"Archive error: {str(e)}")
         flash(f'Error loading archive: {str(e)}', 'danger')
         return render_template('archive_history.html', archived_items=[], total_archived=0, total_value=0, total_paid=0)
 
@@ -575,6 +685,8 @@ def restore_from_archive(archive_id):
         
         flash(f'Item "{archived.description}" restored successfully!', 'success')
     except Exception as e:
+        logger.error(f"Restore from archive error: {str(e)}")
+        db.session.rollback()
         flash(f'Error restoring item: {str(e)}', 'danger')
     
     return redirect(url_for('archive_history'))
@@ -602,23 +714,39 @@ def clear_old_archives():
         
         flash(f'Deleted {count} archived items older than {days} days', 'success')
     except Exception as e:
+        logger.error(f"Clear old archives error: {str(e)}")
+        db.session.rollback()
         flash(f'Error clearing archives: {str(e)}', 'danger')
     
     return redirect(url_for('archive_history'))
 
+# ---------- Static Files Route (for uploaded images) ----------
+@app.route('/static/uploads/<filename>')
+def uploaded_file(filename):
+    """Serve uploaded files safely"""
+    try:
+        return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+    except Exception as e:
+        logger.error(f"Error serving file {filename}: {str(e)}")
+        abort(404)
+
 # ---------- API Endpoints ----------
 @app.route('/api/item/<token>')
 def api_get_item(token):
-    item = Item.query.filter_by(unique_token=token).first_or_404()
-    return jsonify({
-        'token': item.unique_token,
-        'description': item.description,
-        'status': item.status,
-        'paid': item.amount_paid,
-        'required': item.storage_price,
-        'remaining': item.remaining_balance(),
-        'time_remaining': item.time_remaining()
-    })
+    try:
+        item = Item.query.filter_by(unique_token=token).first_or_404()
+        return jsonify({
+            'token': item.unique_token,
+            'description': item.description,
+            'status': item.status,
+            'paid': item.amount_paid,
+            'required': item.storage_price,
+            'remaining': item.remaining_balance(),
+            'time_remaining': item.time_remaining()
+        })
+    except Exception as e:
+        logger.error(f"API get item error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/archive/stats')
 def api_archive_stats():
@@ -628,13 +756,22 @@ def api_archive_stats():
         total_value = sum(item.storage_price for item in ArchivedItem.query.all())
         total_paid = sum(item.amount_paid for item in ArchivedItem.query.all())
         
-        # Monthly breakdown
+        # Monthly breakdown - PostgreSQL compatible
         from sqlalchemy import func
-        monthly = db.session.query(
-            func.strftime('%Y-%m', ArchivedItem.archived_at).label('month'),
-            func.count(ArchivedItem.id).label('count'),
-            func.sum(ArchivedItem.storage_price).label('value')
-        ).group_by('month').order_by('month').all()
+        if 'postgresql' in str(db.engine.url):
+            # PostgreSQL syntax
+            monthly = db.session.query(
+                func.to_char(ArchivedItem.archived_at, 'YYYY-MM').label('month'),
+                func.count(ArchivedItem.id).label('count'),
+                func.sum(ArchivedItem.storage_price).label('value')
+            ).group_by('month').order_by('month').all()
+        else:
+            # SQLite syntax
+            monthly = db.session.query(
+                func.strftime('%Y-%m', ArchivedItem.archived_at).label('month'),
+                func.count(ArchivedItem.id).label('count'),
+                func.sum(ArchivedItem.storage_price).label('value')
+            ).group_by('month').order_by('month').all()
         
         return jsonify({
             'total_archived': total_archived,
@@ -643,10 +780,42 @@ def api_archive_stats():
             'monthly': [{'month': m.month, 'count': m.count, 'value': float(m.value) if m.value else 0} for m in monthly]
         })
     except Exception as e:
+        logger.error(f"API archive stats error: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
-if __name__ == '__main__':
-    with app.app_context():
+# ---------- Error Handlers ----------
+@app.errorhandler(404)
+def not_found_error(error):
+    return render_template('404.html'), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    db.session.rollback()
+    logger.error(f"Internal server error: {str(error)}")
+    return render_template('500.html'), 500
+
+# ---------- Initialize Database on Startup ----------
+with app.app_context():
+    try:
+        # Test database connection
+        db.engine.connect()
+        logger.info("✅ Database connection successful")
+        
+        # Create tables if they don't exist
         db.create_all()
+        logger.info("✅ Database tables created/verified")
+    except Exception as e:
+        logger.error(f"❌ Database setup error: {str(e)}")
+        logger.error("Application will continue but database features may not work")
+
+# ---------- Main Entry Point ----------
+if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    app.run(debug=False, host='0.0.0.0', port=port)
+    debug_mode = os.environ.get('FLASK_ENV') != 'production'
+    
+    # For local development only
+    if debug_mode:
+        app.run(debug=True, host='0.0.0.0', port=port)
+    else:
+        # Production - gunicorn will handle this
+        app.run(debug=False, host='0.0.0.0', port=port)
